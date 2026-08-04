@@ -6,8 +6,22 @@ from pathlib import Path
 
 from audiobook_ai import config
 from audiobook_ai.tts.base import TTSBackend
-from audiobook_ai.tts.fish_speech import FishSpeechBackend
+from audiobook_ai.tts.qwen3_tts import Qwen3TTSBackend
 from audiobook_ai.weights.manager import ModelManager
+
+_SUPPORTED = frozenset({"qwen3-tts", "qwen3tts"})
+_REJECTED = frozenset(
+    {
+        "fish",
+        "fish-speech",
+        "fish_speech",
+        "fishspeech",
+        "s1-mini",
+        "s2-pro",
+        "cosyvoice",
+        "cosyvoice3",
+    }
+)
 
 
 def get_tts_backend(
@@ -17,15 +31,21 @@ def get_tts_backend(
     manager: ModelManager | None = None,
     fish_model: str | None = None,
 ) -> TTSBackend:
-    """Return a TTS backend by name (MVP: only ``fish-speech`` in-process)."""
-    normalized = name.strip().lower()
-    if normalized in {"fish-speech", "fish_speech", "fishspeech"}:
-        return FishSpeechBackend(
-            manager=manager,
-            cache_dir=cache_dir,
-            fish_model=fish_model or config.DEFAULT_FISH_MODEL,
+    """Return the product TTS backend (only ``qwen3-tts``).
+
+    ``fish_model`` is accepted for call-site compatibility during migration and
+    ignored; Fish backends are rejected.
+    """
+    del fish_model  # no dual-backend / Fish alias routing
+    normalized = name.strip().lower().replace("_", "-")
+    if normalized in _SUPPORTED:
+        return Qwen3TTSBackend(manager=manager, cache_dir=cache_dir)
+    if normalized in _REJECTED:
+        raise ValueError(
+            f"TTS backend {name!r} is no longer supported. "
+            "Only 'qwen3-tts' (alias 'qwen3tts') is available."
         )
     raise ValueError(
-        f"Unknown TTS backend {name!r}. MVP supports only 'fish-speech' "
-        "(no Kokoro/Piper/XTTS/cloud)."
+        f"Unknown TTS backend {name!r}. Only 'qwen3-tts' (alias 'qwen3tts') "
+        "is supported (no Fish/CosyVoice/cloud)."
     )

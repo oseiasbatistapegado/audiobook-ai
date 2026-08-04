@@ -39,6 +39,7 @@ class BookWorkLayout:
     root: Path
     story_path: Path
     manifest_path: Path
+    interpret_progress_path: Path
     audio_dir: Path
     chapters_dir: Path
     jobs_dir: Path
@@ -82,6 +83,7 @@ def ensure_book_work_dir(work_dir: Path | str, book_id: str) -> BookWorkLayout:
         root=root,
         story_path=root / config.STORY_FILENAME,
         manifest_path=root / config.MANIFEST_FILENAME,
+        interpret_progress_path=root / config.INTERPRET_PROGRESS_FILENAME,
         audio_dir=audio_dir,
         chapters_dir=chapters_dir,
         jobs_dir=jobs_dir,

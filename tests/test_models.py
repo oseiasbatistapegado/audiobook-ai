@@ -28,15 +28,15 @@ def test_valid_minimal_llm_response() -> None:
     assert response.dialogues[0].emotion is Emotion.NEUTRAL
 
 
-def test_invalid_emotion_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Dialogue.model_validate(
-            {
-                "speaker_name": "Hero",
-                "emotion": "furious",
-                "text": "No!",
-            }
-        )
+def test_unknown_emotion_falls_back_to_neutral() -> None:
+    dialogue = Dialogue.model_validate(
+        {
+            "speaker_name": "Hero",
+            "emotion": "doomsday",
+            "text": "No!",
+        }
+    )
+    assert dialogue.emotion is Emotion.NEUTRAL
 
 
 def test_dialogue_requires_speaker() -> None:

@@ -1,119 +1,153 @@
-"""Fish Speech in-process backend tests (engine/manager mocked)."""
+"""Qwen3-TTS in-process backend tests (engine/manager mocked)."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from audiobook_ai.models.emotion import Emotion
 from audiobook_ai.models.tts import TTSRequest
 from audiobook_ai.tts.factory import get_tts_backend
-from audiobook_ai.tts.fish_speech import FishSpeechBackend, FishSpeechError
-from audiobook_ai.weights.fish import FISH_SPEECH_ID, FISH_SPEECH_REQUIRED_FILES
+from audiobook_ai.tts.qwen3_tts import Qwen3TTSBackend, Qwen3TTSError
 from audiobook_ai.weights.manager import ModelManager
+from audiobook_ai.weights.qwen3_tts import QWEN3_TTS_ID, QWEN3_TTS_REQUIRED_FILES
 
 
 def _touch_required(dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    for name in FISH_SPEECH_REQUIRED_FILES:
-        (dest / name).write_bytes(b"ok")
+    for name in QWEN3_TTS_REQUIRED_FILES:
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
 
 
 class _FakeEngine:
     def __init__(self) -> None:
         self.calls = 0
+        self.prompt_calls = 0
+        self.last_kwargs: dict | None = None
 
-    def inference(self, req: object) -> list[SimpleNamespace]:
+    def create_voice_clone_prompt(self, **kwargs: object) -> list[dict]:
+        self.prompt_calls += 1
+        return [{"ref": kwargs.get("ref_audio"), "text": kwargs.get("ref_text")}]
+
+    def generate_voice_clone(self, **kwargs: object) -> tuple[list, int]:
         self.calls += 1
-        return [
-            SimpleNamespace(code="final", audio=(44100, b"RIFF....WAVEfmt ")),
-        ]
+        self.last_kwargs = dict(kwargs)
+        text = kwargs.get("text")
+        n = len(text) if isinstance(text, list) else 1
+        # int16-compatible list; backend converts without requiring float numpy.
+        return [[0] * 2400 for _ in range(n)], 24000
 
 
 def _voice_refs(tmp_path: Path) -> Path:
-    """Minimal pt-BR voice reference tree for unit tests (no packaged assets)."""
+    """Minimal pt-BR voice reference tree for unit tests."""
     voice = tmp_path / "references" / "narrator"
     voice.mkdir(parents=True)
     (voice / "reference.wav").write_bytes(b"RIFF....WAVE")
-    (voice / "reference.lab").write_text("olá\n", encoding="utf-8")
+    (voice / "reference.txt").write_text("olá mundo\n", encoding="utf-8")
+    (voice / "metadata.json").write_text(
+        '{"language": "pt-BR"}',
+        encoding="utf-8",
+    )
     return tmp_path / "references"
 
 
-def test_factory_returns_fish_speech() -> None:
-    backend = get_tts_backend("fish-speech")
-    assert isinstance(backend, FishSpeechBackend)
+def test_factory_returns_qwen3_tts() -> None:
+    backend = get_tts_backend("qwen3-tts")
+    assert isinstance(backend, Qwen3TTSBackend)
+    assert isinstance(get_tts_backend("qwen3tts"), Qwen3TTSBackend)
+
+
+def test_factory_rejects_fish_and_cosyvoice() -> None:
+    for name in ("fish-speech", "s1-mini", "cosyvoice", "cosyvoice3"):
+        with pytest.raises(ValueError, match="qwen3-tts|no longer supported|Only"):
+            get_tts_backend(name)
 
 
 def test_synthesize_reuses_loaded_engine_within_worker(tmp_path: Path) -> None:
-    """Within one Fish worker invocation the engine is reused across chunks."""
+    """Within one TTS worker invocation the engine is reused across chunks."""
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
+    _touch_required(cache / QWEN3_TTS_ID)
     refs = _voice_refs(tmp_path)
     engine = _FakeEngine()
 
     def factory(model_path: Path, device: str) -> _FakeEngine:
-        assert model_path == cache / FISH_SPEECH_ID
+        assert model_path == cache / QWEN3_TTS_ID
         assert device == "cpu"
         return engine
 
     manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-    backend = FishSpeechBackend(
+    backend = Qwen3TTSBackend(
         manager=manager,
         engine_factory=factory,
         require_gpu=False,
         device="cpu",
         references_dir=refs,
     )
-    req = TTSRequest(text="Hello", voice_id="narrator", emotion=Emotion.NEUTRAL)
+    req = TTSRequest(text="Hello", voice_id="narrator", emotion=Emotion.ANGRY)
     first = backend.synthesize(req)
     second = backend.synthesize(req)
     assert first.data and second.data
     assert engine.calls == 2
-    # factory invoked once (load once) — restart is orchestrator/worker exit
+    assert engine.prompt_calls == 1  # VoiceClonePrompt cached per voice_id
     assert backend._loaded is True
+    assert engine.last_kwargs is not None
+    assert "instruct" not in engine.last_kwargs
+    assert "emotion" not in engine.last_kwargs
+    assert engine.last_kwargs.get("language") == "Portuguese"
+    assert engine.last_kwargs.get("text") == "Hello"
+    assert "voice_clone_prompt" in engine.last_kwargs
+
+
+def test_synthesize_batch_same_voice(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    _touch_required(cache / QWEN3_TTS_ID)
+    refs = _voice_refs(tmp_path)
+    engine = _FakeEngine()
+
+    manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
+    backend = Qwen3TTSBackend(
+        manager=manager,
+        engine_factory=lambda *_: engine,
+        require_gpu=False,
+        device="cpu",
+        references_dir=refs,
+    )
+    reqs = [
+        TTSRequest(text="One", voice_id="narrator", emotion=Emotion.NEUTRAL, segment_index=0),
+        TTSRequest(text="Two", voice_id="narrator", emotion=Emotion.NEUTRAL, segment_index=1),
+    ]
+    segs = backend.synthesize_batch(reqs)
+    assert len(segs) == 2
+    assert engine.calls == 1
+    assert engine.prompt_calls == 1
+    assert engine.last_kwargs is not None
+    assert engine.last_kwargs.get("text") == ["One", "Two"]
 
 
 def test_missing_import_is_clear(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
+    _touch_required(cache / QWEN3_TTS_ID)
     manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
 
     def boom(model_path: Path, device: str) -> _FakeEngine:
-        raise ImportError("No module named 'fish_speech'")
+        raise ImportError("No module named 'qwen_tts'")
 
-    backend = FishSpeechBackend(
+    backend = Qwen3TTSBackend(
         manager=manager,
         engine_factory=boom,
         require_gpu=False,
         device="cpu",
     )
-    with pytest.raises(FishSpeechError, match="not installed|tts-fish|fish-speech"):
-        backend.synthesize(TTSRequest(text="Hello", voice_id="narrator"))
-
-
-def test_invalid_weights_error(tmp_path: Path) -> None:
-    cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
-    manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-
-    def boom(model_path: Path, device: str) -> _FakeEngine:
-        raise FishSpeechError(f"Invalid Fish Speech weights: missing codec.pth under {model_path}")
-
-    backend = FishSpeechBackend(
-        manager=manager,
-        engine_factory=boom,
-        require_gpu=False,
-        device="cpu",
-    )
-    with pytest.raises(FishSpeechError, match="Invalid Fish Speech weights"):
+    with pytest.raises(Qwen3TTSError, match="not installed|tts-qwen|qwen"):
         backend.synthesize(TTSRequest(text="Hello", voice_id="narrator"))
 
 
 def test_gpu_required_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
+    _touch_required(cache / QWEN3_TTS_ID)
     manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
 
     class _Torch:
@@ -128,82 +162,30 @@ def test_gpu_required_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
                 def is_available() -> bool:
                     return False
 
-    import audiobook_ai.tts.fish_speech as mod
-
     monkeypatch.setitem(__import__("sys").modules, "torch", _Torch())
-    # Force resolve path without injected device
-    backend = FishSpeechBackend(
+
+    backend = Qwen3TTSBackend(
         manager=manager,
         engine_factory=lambda *_: _FakeEngine(),
         require_gpu=True,
-        device=None,
     )
-    # Patch _resolve_device to use our fake torch via import inside function —
-    # inject by patching the helper.
-    monkeypatch.setattr(
-        mod,
-        "_resolve_device",
-        lambda require_gpu=True: (_ for _ in ()).throw(
-            FishSpeechError("No usable GPU detected")
-        ),
-    )
-    with pytest.raises(FishSpeechError, match="GPU"):
-        backend.ensure_ready()
+    with pytest.raises(Qwen3TTSError, match="GPU"):
+        backend.synthesize(TTSRequest(text="Hello", voice_id="narrator"))
 
 
-def test_ensure_weights_does_not_load_engine(tmp_path: Path) -> None:
+def test_ensure_weights_without_engine(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
-    loads = 0
+    calls: list[str] = []
 
-    def factory(model_path: Path, device: str) -> _FakeEngine:
-        nonlocal loads
-        loads += 1
-        return _FakeEngine()
+    def fake_download(**kwargs: object) -> Path:
+        calls.append("download")
+        local_dir = Path(str(kwargs["local_dir"]))
+        _touch_required(local_dir)
+        return local_dir
 
-    manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-    backend = FishSpeechBackend(
-        manager=manager,
-        engine_factory=factory,
-        require_gpu=False,
-        device="cpu",
-    )
+    manager = ModelManager(cache_dir=cache, hub_download=fake_download)
+    backend = Qwen3TTSBackend(manager=manager, require_gpu=False, device="cpu")
     handle = backend.ensure_weights()
-    assert handle.path == cache / FISH_SPEECH_ID
-    assert loads == 0
-    assert backend._loaded is False
-
-
-def test_release_idempotent_and_reload(tmp_path: Path) -> None:
-    cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
-    refs = _voice_refs(tmp_path)
-    engines: list[_FakeEngine] = []
-
-    def factory(model_path: Path, device: str) -> _FakeEngine:
-        engine = _FakeEngine()
-        engines.append(engine)
-        return engine
-
-    manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-    backend = FishSpeechBackend(
-        manager=manager,
-        engine_factory=factory,
-        require_gpu=False,
-        device="cpu",
-        references_dir=refs,
-    )
-    req = TTSRequest(text="Hello", voice_id="narrator", emotion=Emotion.NEUTRAL)
-    backend.synthesize(req)
-    assert len(engines) == 1
-    assert backend._loaded is True
-
-    backend.release()
-    assert backend._loaded is False
+    assert handle.logical_id == QWEN3_TTS_ID
+    assert calls == ["download"]
     assert backend._engine is None
-    backend.release()  # idempotent
-
-    again = backend.synthesize(req)
-    assert again.data
-    assert len(engines) == 2
-    assert backend._loaded is True

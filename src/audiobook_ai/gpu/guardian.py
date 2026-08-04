@@ -6,7 +6,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from audiobook_ai import config
 from audiobook_ai.gpu.memory import MemoryProvider, SystemMemoryProvider, VRAMSnapshot
@@ -52,6 +52,8 @@ class GuardianConfig:
     load_targets_mib: dict[str, int] | None = None
     progressive_window_k: int = config.PROGRESSIVE_GROWTH_WINDOW_K
     progressive_drop_mib: int = config.PROGRESSIVE_GROWTH_DROP_MIB
+    progressive_allocated_growth_mib: int = config.PROGRESSIVE_ALLOCATED_GROWTH_MIB
+    progressive_floor_margin_mib: int = config.PROGRESSIVE_FLOOR_MARGIN_MIB
 
     def load_target_for(self, backend: str) -> int | None:
         targets = self.load_targets_mib
@@ -60,37 +62,83 @@ class GuardianConfig:
         return targets.get(backend)
 
 
-class ProgressiveGrowthDetector:
-    """Sliding-window detector for sustained free-VRAM decline after reclaim.
+@dataclass(frozen=True, slots=True)
+class GrowthSample:
+    """Post-reclaim VRAM sample for real-pressure progressive detection."""
 
-    A single anomalous sample MUST NOT trigger restart. Requires window size
-    ``K`` and cumulative drop ≥ ``N`` MiB with a consistently descending trend.
+    free_mib: float
+    allocated_mib: float | None = None
+    reserved_mib: float | None = None
+
+
+class ProgressiveGrowthDetector:
+    """Sliding-window detector for *real* VRAM pressure after reclaim.
+
+    Free-drop alone with stable allocated/reserved and large free headroom
+    MUST NOT trigger restart (Fish-era false positives on Qwen3-TTS).
+
+    Restart when:
+    - free_mib approaches hard_floor within ``floor_margin_mib``, OR
+    - allocated_mib and/or reserved_mib grow persistently by ≥ ``growth_mib``
+      over a full window with a consistent ascending trend.
     """
 
-    def __init__(self, *, window_k: int, drop_mib: float) -> None:
+    def __init__(
+        self,
+        *,
+        window_k: int,
+        growth_mib: float,
+        hard_floor_mib: float,
+        floor_margin_mib: float,
+    ) -> None:
         if window_k < 2:
             raise ValueError("progressive growth window_k must be >= 2")
         self.window_k = window_k
-        self.drop_mib = drop_mib
-        self._samples: deque[float] = deque(maxlen=window_k)
+        self.growth_mib = growth_mib
+        self.hard_floor_mib = hard_floor_mib
+        self.floor_margin_mib = floor_margin_mib
+        self._samples: deque[GrowthSample] = deque(maxlen=window_k)
 
     def reset(self) -> None:
         self._samples.clear()
 
-    def record(self, free_mib: float) -> bool:
-        """Record a post-reclaim free sample. Return True if growth detected."""
-        self._samples.append(free_mib)
+    def record(self, sample: GrowthSample | float) -> bool:
+        """Record a post-reclaim sample. Return True if real pressure detected.
+
+        A bare ``float`` is treated as ``free_mib`` only (allocated/reserved
+        unknown) — near-floor still triggers; free-drop alone does not.
+        """
+        if isinstance(sample, (int, float)):
+            sample = GrowthSample(free_mib=float(sample))
+
+        near_floor = sample.free_mib <= (self.hard_floor_mib + self.floor_margin_mib)
+        if near_floor:
+            return True
+
+        self._samples.append(sample)
         if len(self._samples) < self.window_k:
             return False
+
         samples = list(self._samples)
-        cumulative_drop = samples[0] - samples[-1]
-        if cumulative_drop < self.drop_mib:
+        if self._persistent_growth(
+            [s.allocated_mib for s in samples],
+        ) or self._persistent_growth(
+            [s.reserved_mib for s in samples],
+        ):
+            return True
+        return False
+
+    def _persistent_growth(self, values: list[float | None]) -> bool:
+        if any(v is None for v in values):
             return False
-        # Consistent descent: each step decreases (allow tiny epsilon noise).
-        descending = all(
-            samples[i] >= samples[i + 1] - 1e-6 for i in range(len(samples) - 1)
-        )
-        return descending
+        nums = [float(v) for v in values if v is not None]
+        if len(nums) < self.window_k:
+            return False
+        cumulative = nums[-1] - nums[0]
+        if cumulative < self.growth_mib:
+            return False
+        ascending = all(nums[i] <= nums[i + 1] + 1e-6 for i in range(len(nums) - 1))
+        return ascending
 
 
 class VRAMGuardian:
@@ -106,7 +154,9 @@ class VRAMGuardian:
         self.cfg = cfg or GuardianConfig()
         self.growth = ProgressiveGrowthDetector(
             window_k=self.cfg.progressive_window_k,
-            drop_mib=float(self.cfg.progressive_drop_mib),
+            growth_mib=float(self.cfg.progressive_allocated_growth_mib),
+            hard_floor_mib=float(self.cfg.hard_floor_mib),
+            floor_margin_mib=float(self.cfg.progressive_floor_margin_mib),
         )
 
     def snapshot(self) -> VRAMSnapshot:
@@ -267,15 +317,42 @@ class VRAMGuardian:
             )
         return snap
 
-    def record_post_reclaim(self, free_mib: float) -> bool:
-        """Record post-reclaim free; True if progressive growth demands restart."""
-        detected = self.growth.record(free_mib)
+    def record_post_reclaim(
+        self,
+        free_or_snap: float | VRAMSnapshot | GrowthSample,
+    ) -> bool:
+        """Record post-reclaim metrics; True if real progressive pressure.
+
+        Accepts free_mib float (legacy), ``GrowthSample``, or full snapshot.
+        """
+        if isinstance(free_or_snap, VRAMSnapshot):
+            if free_or_snap.free_mib is None:
+                return False
+            sample = GrowthSample(
+                free_mib=float(free_or_snap.free_mib),
+                allocated_mib=free_or_snap.allocated_mib,
+                reserved_mib=free_or_snap.reserved_mib,
+            )
+        elif isinstance(free_or_snap, GrowthSample):
+            sample = free_or_snap
+        else:
+            sample = GrowthSample(free_mib=float(free_or_snap))
+
+        detected = self.growth.record(sample)
         if detected:
             logger.info(
-                "[gpu] event=progressive_growth free_mib=%.1f window_k=%s drop_mib=%s",
-                free_mib,
+                "[gpu] event=progressive_growth free_mib=%.1f allocated_mib=%s "
+                "reserved_mib=%s window_k=%s growth_mib=%s floor_margin_mib=%s",
+                sample.free_mib,
+                None
+                if sample.allocated_mib is None
+                else f"{sample.allocated_mib:.1f}",
+                None
+                if sample.reserved_mib is None
+                else f"{sample.reserved_mib:.1f}",
                 self.cfg.progressive_window_k,
-                self.cfg.progressive_drop_mib,
+                self.cfg.progressive_allocated_growth_mib,
+                self.cfg.progressive_floor_margin_mib,
             )
         return detected
 
@@ -289,15 +366,20 @@ class VRAMGuardian:
         backend: str | None = None,
         chunk_id: str | None = None,
         snap: VRAMSnapshot | None = None,
+        **extra: Any,
     ) -> None:
         snap = snap or self.snapshot()
-        logger.info(
-            "[gpu] backend=%s event=%s chunk_id=%s free_mib=%s allocated_mib=%s "
-            "reserved_mib=%s",
-            backend,
-            event,
-            chunk_id,
-            None if snap.free_mib is None else f"{snap.free_mib:.1f}",
-            None if snap.allocated_mib is None else f"{snap.allocated_mib:.1f}",
-            None if snap.reserved_mib is None else f"{snap.reserved_mib:.1f}",
-        )
+        fm = f"{snap.free_mib:.1f}" if snap.free_mib is not None else None
+        am = f"{snap.allocated_mib:.1f}" if snap.allocated_mib is not None else None
+        rm = f"{snap.reserved_mib:.1f}" if snap.reserved_mib is not None else None
+        parts: list[str] = [
+            f"[gpu] backend={backend}",
+            f"event={event}",
+            f"chunk_id={chunk_id}",
+            f"free_mib={fm}",
+            f"allocated_mib={am}",
+            f"reserved_mib={rm}",
+        ]
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        logger.info(" ".join(parts))

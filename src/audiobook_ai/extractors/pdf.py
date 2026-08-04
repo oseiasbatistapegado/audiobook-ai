@@ -7,6 +7,7 @@ from typing import Any
 
 from audiobook_ai.extractors.base import TextExtractor
 from audiobook_ai.models.book import ExtractedPage, ExtractedPdf
+from audiobook_ai.parser.text_normalize import repair_midword_linebreaks
 from audiobook_ai.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,6 +47,6 @@ class PdfExtractor(TextExtractor):
         pages: list[ExtractedPage] = []
         for index in range(document.page_count):
             page = document.load_page(index)
-            text = page.get_text("text") or ""
+            text = repair_midword_linebreaks(page.get_text("text") or "")
             pages.append(ExtractedPage(page_number=index + 1, text=text))
         return pages

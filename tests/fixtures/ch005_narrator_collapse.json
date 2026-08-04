@@ -1,0 +1,77 @@
+{
+  "unit_text": "A office lady scolded the blond boy on the priority seat. The elderly woman whispered. A schoolgirl in uniform challenged him.\n\n'Why should I give up my seat?' the blond boy said.\n\n'You're in a priority seat,' the office lady snapped.\n\n'Ta t-tudo bem, já foi...' the elderly woman whispered.\n\n'I think the lady is right,' the schoolgirl said.\n\n'That's a contribution to society?' the blond boy replied at length.",
+  "story_characters": [
+    {
+      "id": "office_lady",
+      "name": "Funcionária de Escritório",
+      "aliases": []
+    },
+    {
+      "id": "blond_boy",
+      "name": "Garoto Loiro",
+      "aliases": ["blond boy"]
+    },
+    {
+      "id": "elderly_woman",
+      "name": "Senhora Idosa",
+      "aliases": []
+    },
+    {
+      "id": "schoolgirl",
+      "name": "Garota do Uniforme",
+      "aliases": []
+    }
+  ],
+  "allowed_speakers": [
+    "narrator",
+    "office_lady",
+    "blond_boy",
+    "elderly_woman",
+    "schoolgirl"
+  ],
+  "collapsed_response": {
+    "dialogues": [
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "Uma funcionária repreendeu o garoto loiro no assento preferencial."
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "‘Por que eu deveria ceder meu lugar?’"
+      },
+      {
+        "speaker_id": "office_lady",
+        "emotion": "angry",
+        "text": "‘Você está num assento preferencial!’"
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "‘Não entendo. Lugares preferenciais são exatamente isso.’"
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "whisper",
+        "text": "‘Ta t-tudo bem, já foi…’"
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "‘Hum… Acho que a senhora tem razão.’"
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "happy",
+        "text": "‘E a nova desafiante é uma garota bonita, hein?’"
+      },
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "‘Uma contribuição para a sociedade, diz você?’"
+      }
+    ],
+    "story_updates": {}
+  }
+}

@@ -7,9 +7,21 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv*
 
 # Pipeline outputs (story.json, chapter audio, m4b, LLM caches, file logs)
 out/
-.direnv
+
+# IDE / Editor
+.kimi-code/
+
+# Environment / Nix
+.direnv/
 .pytest_cache/
+
+# Aider
+.aider*
+
+# Misc
+=8.0.0
+AGENTS.md

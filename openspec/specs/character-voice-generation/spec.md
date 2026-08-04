@@ -5,15 +5,15 @@ Geração/atribuição automática de vozes pt-BR por personagem via abstração
 ## Requirements
 
 ### Requirement: Abstração VoiceGenerator independente do TTS
-O sistema SHALL expor uma abstração `VoiceGenerator` (interface/protocol) com operação `generate_voice(character, language="pt-BR") -> GeneratedVoice`, independente de `TTSBackend` / Fish Speech. A implementação concreta MVP MUST ser um backend de **voice design generativo** (candidato: Parler-TTS pt-BR) que cria identidade sintética nova e materializa referência pt-BR — MUST NÃO ser seleção/cópia de um catálogo finito de bases.
+O sistema SHALL expor uma abstração `VoiceGenerator` (interface/protocol) com operação `generate_voice(character, language="pt-BR") -> GeneratedVoice`, independente de `TTSBackend` / Qwen3-TTS. A implementação concreta MVP MUST ser um backend de **voice design generativo** (candidato: Parler-TTS pt-BR) que cria identidade sintética nova e materializa referência pt-BR — MUST NÃO ser seleção/cópia de um catálogo finito de bases.
 
 #### Scenario: Factory resolve gerador padrão
 - **WHEN** o pipeline precisa de uma voz para um personagem novo e o gerador configurado é o MVP generativo
-- **THEN** o factory retorna um `VoiceGenerator` que produz `GeneratedVoice` com referência sintética nova utilizável pelo Fish Speech
+- **THEN** o factory retorna um `VoiceGenerator` que produz `GeneratedVoice` com referência sintética nova utilizável pelo Qwen3-TTS Voice Clone
 
-#### Scenario: Gerador não importa Fish Speech
+#### Scenario: Gerador não importa backend TTS
 - **WHEN** o módulo do `VoiceGenerator` MVP é carregado
-- **THEN** ele MUST NÃO depender de APIs internas do Fish Speech para criar a identidade vocal
+- **THEN** ele MUST NÃO depender de APIs internas do backend TTS para criar a identidade vocal
 
 ### Requirement: Idioma canônico pt-BR na geração
 Toda voz gerada automaticamente MUST ter `language` igual a `pt-BR` nos metadados e na fala de referência. O sistema MUST NÃO persistir como sucesso uma referência com sotaque europeu inaceitável, inglês, ou idioma genérico sem verificação auditiva/pt-BR. Portuguese genérico na documentação do modelo MUST NÃO ser tratado como prova de pt-BR.
@@ -23,7 +23,7 @@ Toda voz gerada automaticamente MUST ter `language` igual a `pt-BR` nos metadado
 - **THEN** o `GeneratedVoice` retornado inclui `language="pt-BR"`
 
 #### Scenario: Falha de qualidade pt-BR
-- **WHEN** a geração produz áudio que não passa o critério de aceite pt-BR do smoke/spike
+- **WHEN** a geração produz áudio que não passa o critério de aceite pt-BR do smoke
 - **THEN** a operação é tratada como falha (sem gravar identidade “válida” no voice_map)
 
 ### Requirement: Identidade vocal na primeira aparição do personagem

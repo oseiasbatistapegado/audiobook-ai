@@ -17,23 +17,19 @@ A configuração central MUST definir e expor:
 - `before_chunk_target_mib` (default 768): headroom desejado antes de um novo chunk com modelo já residente;
 - `before_load_target_mib` (por backend, calibrável): headroom exigido antes de carregar/spawnar um modelo.
 
-O default de produto (alias Fish `s1-mini`) para load do Fish Speech MUST ser **8192 MiB** free. Quando o alias ativo for `s2-pro` e o usuário NÃO tiver sobrescrito o load target via CLI/env, o sistema MUST aplicar o preset **22528 MiB**. Parler MUST ter valor de load **separado** e calibrado; um backend desconhecido MUST NÃO herdar implicitamente o valor do Fish. Defaults MUST residir em configuração centralizada e MUST NÃO ser duplicados como magic numbers nos backends. CLI e/ou variáveis de ambiente MAY sobrescrever esses valores com overrides backend-specific.
+O load target da fase TTS MUST usar o identificador arquitetural `tts` (e/ou backend concreto `qwen3-tts` quando a calibração for específica do modelo). O default inicial de produto MUST ser **6144 MiB** free antes do load. Defaults Fish `s1-mini` **8192** / `s2-pro` **22528** e a herança implícita “valor do Fish” MUST NÃO permanecer como defaults de produto. Parler MUST manter valor de load **separado**. Um backend desconhecido MUST NÃO herdar implicitamente o load target do TTS. Defaults MUST residir em configuração centralizada. CLI e/ou env MAY sobrescrever com overrides backend-specific. Após o pipeline estável, o target MAY ser recalibrado para `peak observado + margem operacional`; o valor 6144 é margem de integração inicial (~3 GiB observados no smoke), não afirmação de consumo permanente.
 
-#### Scenario: Defaults centralizados s1-mini
-- **WHEN** nenhum override CLI/env é fornecido e o alias Fish é `s1-mini`
-- **THEN** o pipeline usa Fish load target 8192 MiB
-
-#### Scenario: Preset s2-pro sem override
-- **WHEN** `--fish-model s2-pro` está ativo e o usuário não overrideou o fish load target
-- **THEN** o pipeline usa Fish load target 22528 MiB
+#### Scenario: Defaults centralizados TTS
+- **WHEN** nenhum override CLI/env é fornecido
+- **THEN** o pipeline usa load target **6144 MiB** para `tts` / `qwen3-tts`
 
 #### Scenario: Override via config
 - **WHEN** o usuário define reserve/target via flag ou env suportada
-- **THEN** as decisões do guardian usam os valores sobrescritos (preset do alias não vence o override)
+- **THEN** as decisões do guardian usam os valores sobrescritos
 
-#### Scenario: Backend desconhecido não herda Fish
+#### Scenario: Backend desconhecido não herda TTS
 - **WHEN** um backend sem default de load explícito é avaliado
-- **THEN** o sistema não aplica silenciosamente o `before_load_target_mib` do Fish Speech
+- **THEN** o sistema não aplica silenciosamente o `before_load_target_mib` do TTS
 
 ### Requirement: Gate antes de chunk e antes de load
 Antes de iniciar um SpeechChunk no worker, o sistema MUST verificar headroom contra `before_chunk_target_mib` (após reclaim best-effort se necessário) e MUST NÃO iniciar o chunk se `free_mib < hard_floor_mib`. Antes de spawn/load de um backend, MUST verificar `before_load_target_mib` desse backend. OOM MUST NÃO ser o mecanismo primário de controle de tamanho/work.
@@ -65,14 +61,22 @@ Erros de política de VRAM MUST distinguir pelo menos: (1) modelo não cabe no l
 - **THEN** a mensagem/contexto identifica falha de release entre fases, não um OOM genérico de síntese
 
 ### Requirement: Detecção de crescimento progressivo por janela deslizante
-Após cada SpeechChunk bem-sucedido, o sistema MUST registrar o system free VRAM pós-reclaim. Com janela configurável das últimas `K` amostras (default **3**) e limiar `N` MiB (default **256**), o worker MUST emitir saída `controlled_restart_needed` quando free cair pelo menos `N` MiB ao longo da janela e a tendência for monotonicamente ou consistentemente descendente. Um único sample anômalo MUST NÃO disparar restart. Independente da tendência, se o próximo chunk não satisfizer `before_chunk_target_mib` após reclaim, o worker MUST reiniciar de forma controlada. Esses sinais do guardian MUST ser o mecanismo primário de hard reclaim mid-fase do Fish Speech quando o teto opcional de residency estiver desabilitado. O sistema MUST NÃO esperar violar `hard_floor_mib` nem OOM para considerar degradação.
+Após cada SpeechChunk bem-sucedido, o sistema MUST registrar métricas pós-reclaim (`free_mib` e, quando disponíveis, `allocated_mib` / `reserved_mib`). O worker MUST emitir `controlled_restart_needed` por crescimento progressivo somente quando houver **pressão real de memória**, definida por pelo menos um de: (1) `allocated_mib` e/ou `reserved_mib` crescendo de forma persistente ao longo da janela configurável; (2) `free_mib` aproximando-se de `hard_floor_mib` (dentro de uma margem configurável). Uma queda absoluta isolada de `free_mib` com `allocated_mib`/`reserved_mib` estáveis e `free_mib` muito acima do hard floor MUST NÃO disparar restart. Um único sample anômalo MUST NÃO disparar restart. Independente da tendência, se o próximo chunk não satisfizer `before_chunk_target_mib` após reclaim, o worker MUST reiniciar de forma controlada. OOM real, stall e ausência de progresso permanecem protegidos.
 
-#### Scenario: Tendência sustentada dispara restart
-- **WHEN** as últimas K amostras pós-reclaim mostram queda acumulada ≥ N MiB com tendência descendente consistente
+#### Scenario: Free cai com allocated estável e folga grande — sem restart
+- **WHEN** as últimas K amostras mostram queda de `free_mib` ≥ N MiB mas `allocated_mib`/`reserved_mib` estão estáveis e `free_mib` permanece muito acima de `hard_floor_mib`
+- **THEN** o worker NÃO emite `controlled_restart_needed` por progressive growth
+
+#### Scenario: Allocated cresce persistentemente — restart
+- **WHEN** as últimas K amostras pós-reclaim mostram crescimento persistente de `allocated_mib` e/ou `reserved_mib`
 - **THEN** o worker encerra com `controlled_restart_needed` sem sintetizar o próximo chunk
 
+#### Scenario: Free aproxima hard floor — restart
+- **WHEN** `free_mib` pós-reclaim entra na margem configurável do `hard_floor_mib`
+- **THEN** o worker faz saída controlada por pressão real de memória
+
 #### Scenario: Sample isolado não reinicia
-- **WHEN** uma única amostra pós-reclaim cai mas a janela não satisfaz queda ≥ N com tendência consistente
+- **WHEN** uma única amostra pós-reclaim é anômala mas a janela não satisfaz pressão real persistente
 - **THEN** o worker não dispara restart só por esse sample
 
 #### Scenario: Target de chunk força restart imediato
@@ -80,5 +84,5 @@ Após cada SpeechChunk bem-sucedido, o sistema MUST registrar o system free VRAM
 - **THEN** o worker faz saída controlada imediatamente, mesmo sem tendência completa na janela
 
 #### Scenario: Headroom estável permite continuar residente
-- **WHEN** após vários chunks o free pós-reclaim permanece acima de `before_chunk_target_mib` e a janela K/N não indica tendência descendente ≥ N
+- **WHEN** após vários chunks o free pós-reclaim permanece acima de `before_chunk_target_mib` e não há pressão real (allocated/reserved estáveis, free longe do floor)
 - **THEN** o guardian NÃO exige hard reclaim e o worker MAY continuar sintetizando na mesma invocação

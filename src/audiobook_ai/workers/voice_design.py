@@ -1,7 +1,11 @@
 """Voice Design worker: load Parler → batch missing voices → unload → exit.
 
-Hard reclaim between Voice Design and Fish Speech is process exit, verified
+Hard reclaim between Voice Design and TTS is process exit, verified
 by the orchestrator's LifecycleManager.
+
+This worker SHOULD run under the Parler-isolated interpreter
+(``.venv-parler`` / ``AUDIOBOOK_AI_VOICE_DESIGN_PYTHON``) because Parler
+requires ``transformers==4.46.1``, incompatible with ``qwen-tts``.
 """
 
 from __future__ import annotations

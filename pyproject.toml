@@ -1,14 +1,14 @@
 [project]
 name = "narrative-compiler-py"
 version = "0.1.0"
-description = "PDF → Ollama → Fish Speech in-process → M4B audiobook CLI"
+description = "PDF → llama-server → Parler Voice Design → Qwen3-TTS → M4B audiobook CLI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=3.13.0",
-    # fish-speech / transformers<=4.57 need hub <1; uv run re-syncs from lock.
+    # transformers 4.57 (qwen-tts) needs hub <1; uv run re-syncs from lock.
     "huggingface_hub>=0.34.0,<1.0",
-    "ollama>=0.6.2",
+    "httpx>=0.27.0",
     "pydantic>=2.13.4",
     "pymupdf>=1.28.0",
     "rich>=15.0.0",
@@ -16,29 +16,40 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tts-fish = [
-    # Spike: fish-speech pins torch==2.8 (no cp314). On 3.14 use current wheels.
-    # torchaudio lags torch on PyPI (2.11 with torch 2.13 as of 2026-07).
-    "torch>=2.13.0",
-    "torchaudio>=2.11.0",
+tts-qwen = [
+    # Install ROCm/CUDA torch separately first (uv sync torch wheels can overwrite ROCm).
+    # Example ROCm 6.4: uv pip install torch==2.9.1+rocm6.4 torchaudio==2.9.1+rocm6.4
+    #   --index-url https://download.pytorch.org/whl/rocm6.4
     "numpy>=1.26.0",
-    "loguru>=0.6.0",
+    "soundfile>=0.12.0",
     "einops>=0.7.0",
     "safetensors>=0.4.0",
-    "tiktoken>=0.8.0",
-    "ormsgpack>=1.5.0",
+    "accelerate==1.12.0",
+    "transformers==4.57.3",
+    "librosa>=0.10.0",
+    "onnxruntime>=1.17.0",
+    "qwen-tts==0.1.1",
 ]
-# Isolated Voice Design spike — NOT on the audiobook hot path.
-# Install (same --no-deps pattern as fish-speech; full parler-tts resolver
-# pulls ancient numba via descript-audiotools and breaks on Python ≥3.10):
-#   uv sync --extra voice-parler --extra tts-fish
-#   uv pip install --no-deps "parler-tts @ git+https://github.com/huggingface/parler-tts.git"
-#   # fish-speech already provides descript-audio-codec / DAC for Parler decode
+# Voice Design (Parler-TTS pt-BR) — self-contained (DAC pinned; no fish-speech).
+# Install:
+#   uv sync --extra voice-parler --extra tts-qwen
+#   pip install "parler-tts==0.2.3"  (done by bootstrap script, not uv)
+# NOTE: transformers==4.46.1 is pinned in scripts/bootstrap_parler_venv.sh
+# (cannot coexist with tts-qwen transformers==4.57.3 in uv lock resolution).
+# parler-tts is NOT listed here — installed exclusively via bootstrap script.
 voice-parler = [
-    "torch>=2.13.0",
     "soundfile>=0.12.0",
     "numpy>=1.26.0",
     "sentencepiece>=0.2.0",
+    # DAC_PACKAGE / DAC_VERSION — Parler decode without fish-speech.
+    "descript-audio-codec==1.0.0",
+]
+# Speaker resolution v2 — optional embedding-based alias resolution.
+# Install:
+#   uv sync --extra speaker-resolution
+#   uv pip install sentence-transformers
+speaker-resolution = [
+    "sentence-transformers>=4.0.0",
 ]
 
 [project.scripts]

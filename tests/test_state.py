@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,34 @@ from audiobook_ai.state.store import load_story_state, save_story_state
 from audiobook_ai.state.voices import apply_story_updates, ensure_voice, resolve_character_id
 from audiobook_ai.voice.errors import VoiceGenerationError
 from audiobook_ai.voice.registry import VoiceRegistry
+
+# Lazy import to keep importorskip clean
+_discover_base_voices = None
+def _get_discover():
+    global _discover_base_voices
+    if _discover_base_voices is None:
+        from audiobook_ai.voice.catalog import discover_base_voices as _dbv
+        _discover_base_voices = _dbv
+    return _discover_base_voices
+
+
+def _make_voice_assets(tmp_path: Path) -> Path:
+    """Create fake pt-BR voice assets for bank generator tests."""
+    assets = tmp_path / "fake_voices"
+    for name, role, gender in (
+        ("base_male_1", "character", "male"),
+        ("base_female_1", "character", "female"),
+        ("narrator", "narrator", "male"),
+    ):
+        directory = assets / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "reference.wav").write_bytes(b"RIFF....WAVE")
+        (directory / "reference.lab").write_text("olá\n", encoding="utf-8")
+        (directory / "metadata.json").write_text(
+            json.dumps({"language": "pt-BR", "role": role, "gender": gender}),
+            encoding="utf-8",
+        )
+    return assets
 
 
 def test_load_save_roundtrip(tmp_path: Path) -> None:
@@ -34,7 +63,14 @@ def test_missing_story_returns_empty(tmp_path: Path) -> None:
     assert state.voice_map == {}
 
 
-def test_voice_immutable_after_first_assignment(tmp_path: Path) -> None:
+def test_voice_immutable_after_first_assignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assets = _make_voice_assets(tmp_path)
+    monkeypatch.setattr(
+        "audiobook_ai.voice.generator.discover_base_voices",
+        lambda **_kw: _get_discover()(assets_root=assets),
+    )
     state = StoryState(characters=[Character(id="hero", name="Hero")])
     cache = tmp_path / "cache"
     book_id = "c" * 32
@@ -49,7 +85,14 @@ def test_voice_immutable_after_first_assignment(tmp_path: Path) -> None:
     assert first == "hero"
 
 
-def test_alias_resolves_same_id(tmp_path: Path) -> None:
+def test_alias_resolves_same_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assets = _make_voice_assets(tmp_path)
+    monkeypatch.setattr(
+        "audiobook_ai.voice.generator.discover_base_voices",
+        lambda **_kw: _get_discover()(assets_root=assets),
+    )
     state = StoryState(
         characters=[Character(id="hero", name="Arthur", aliases=[])],
     )

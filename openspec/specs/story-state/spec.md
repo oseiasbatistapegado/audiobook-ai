@@ -23,7 +23,7 @@ Cada personagem MUST possuir um ID estável. Nomes, apelidos e títulos MUST map
 - **THEN** diálogos posteriores que usam o alias resolvem para o mesmo ID e a mesma voz
 
 ### Requirement: voice_map fixo por personagem
-A voz é propriedade do personagem via `voice_map[character_id]` no escopo do audiobook. Após a primeira atribuição bem-sucedida, a voz MUST permanecer fixa. O sistema MUST NÃO escolher voz dinamicamente a cada capítulo. Os voice ids MUST referir-se a identidades com assets de referência **gerados** (ou override do usuário) sob o registry scoped por `book_id`, utilizáveis pelo Fish Speech — MUST NÃO permanecer como IDs simbólicos sem pasta de referência pt-BR, nem como cópias de banco finito apresentadas como geração única.
+A voz é propriedade do personagem via `voice_map[character_id]` no escopo do audiobook. Após a primeira atribuição bem-sucedida, a voz MUST permanecer fixa. O sistema MUST NÃO escolher voz dinamicamente a cada capítulo. Os voice ids MUST referir-se a identidades com assets de referência **gerados** (ou override do usuário) sob o registry scoped por `book_id`, utilizáveis pelo ator TTS de produto (Qwen3-TTS Voice Clone) — MUST NÃO permanecer como IDs simbólicos sem pasta de referência pt-BR, nem como cópias de banco finito apresentadas como geração única.
 
 #### Scenario: Primeira aparição atribui voz gerada
 - **WHEN** um personagem aparece pela primeira vez sem entrada em `voice_map`
@@ -36,3 +36,22 @@ A voz é propriedade do personagem via `voice_map[character_id]` no escopo do au
 #### Scenario: voice_id aponta para assets reais gerados
 - **WHEN** uma entrada é gravada em `voice_map`
 - **THEN** existe (ou é materializada na mesma operação) um diretório resolvível com áudio pt-BR gerado (ou override) para esse personagem no `book_id`
+
+### Requirement: Chapter cast merge sem duplicar identidades
+Após Pass 1, o sistema MUST mesclar personagens novos do chapter cast no `StoryState` persistível reutilizando ids existentes quando aliases/nomes resolvem ao mesmo personagem. A merge MUST NÃO criar entradas duplicadas em `characters` para o mesmo indivíduo narrativo. Voice generation / `voice_map` MUST continuar lazy: existência do personagem no story precede atribuição de fala; geração de voz MUST NÃO ser exigida antes da Pass 2 e MUST NÃO ser disparada em duplicata por causa da Pass 1. Participação speaker/mentioned MUST permanecer metadata chapter-local e MUST NÃO ser persistida como propriedade fixa de identidade em `Character`.
+
+#### Scenario: Novo falante entra no story sem voz ainda
+- **WHEN** Pass 1 descobre `blond_boy` ausente do story
+- **THEN** o personagem pode ser mesclado no estado de trabalho antes da Pass 2 mesmo sem entrada em `voice_map`
+
+#### Scenario: Pass 1 não regenera voz existente
+- **WHEN** `Horikita` já tem `voice_map` e Pass 1 a reutiliza no chapter cast
+- **THEN** o sistema NÃO regenera a voz de `Horikita` por causa da discovery
+
+#### Scenario: Alias novo não duplica personagem
+- **WHEN** Pass 1 registra alias “Horikita-san” para id `Horikita` já existente
+- **THEN** `story.characters` permanece com um único `Horikita` e o alias fica associado a esse id
+
+#### Scenario: Participação não vira campo global de Character
+- **WHEN** Pass 1 classifica um personagem como mentioned-only no capítulo
+- **THEN** o merge no `story.json` NÃO grava um `role`/`participation` persistente nesse `Character`

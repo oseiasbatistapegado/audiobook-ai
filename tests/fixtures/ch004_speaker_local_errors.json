@@ -1,0 +1,70 @@
+{
+  "unit_text": "Meu cérebro, como um computador, executou instantaneamente todos os cálculos.\n\nConclusão: fingirei não ouvi-la. Chamei isso de Estratégia do Sono.\n\n‘Se você não acordar em três segundos, darei uma punição adicional a você.’ perguntou Horikita.\n\n‘O que você quer dizer com punição?’ perguntei.\n\n‘Veja, você está acordado, não é?’\n\n‘Suficiente para me sentir com medo de te irritar.’\n\n‘Fico feliz em ouvir isso. Bem, pode me dar um pouco do seu tempo?’ respondeu Horikita.\n\nRelutantemente, me levantei da cadeira. Uma garota com olhos belos e agudos me encarava.",
+  "story_characters": [
+    {
+      "id": "kiyotaka_ayanokoji",
+      "name": "Kiyotaka Ayanokoji",
+      "aliases": ["Ayanokoji", "Kiyotaka"]
+    },
+    {
+      "id": "suzune_horikita",
+      "name": "Suzune Horikita",
+      "aliases": ["Horikita", "Suzune"]
+    }
+  ],
+  "collapsed_response": {
+    "dialogues": [
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "Meu cérebro, como um computador, executou instantaneamente todos os cálculos para chegar à resposta que mais precisava."
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "Conclusão: fingirão não ouvi-la. Chamei isso de 'Estratégia do Sono'."
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "‘Se você não acordar em três segundos, darei uma punição adicional a você.’ perguntou Horikita."
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "‘O que você quer dizer com punição?’ perguntei."
+      },
+      {
+        "speaker_id": "suzune_horikita",
+        "emotion": "neutral",
+        "text": "‘Veja, você está acordado, não é?’"
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "‘Suficiente para me sentir com medo de te irritar.’"
+      },
+      {
+        "speaker_id": "suzune_horikita",
+        "emotion": "neutral",
+        "text": "‘Fico feliz em ouvir isso. Bem, pode me dar um pouco do seu tempo?’"
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "‘Se eu recusar?’"
+      },
+      {
+        "speaker_id": "suzune_horikita",
+        "emotion": "neutral",
+        "text": "‘Bem, mesmo que você não tenha direito de vetar essa decisão, acho que ficaria extremamente descontente.’"
+      },
+      {
+        "speaker_id": "kiyotaka_ayanokoji",
+        "emotion": "neutral",
+        "text": "Relutantemente, me levantei da cadeira. Uma garota com olhos belos e agudos me encarava."
+      }
+    ],
+    "story_updates": {}
+  }
+}

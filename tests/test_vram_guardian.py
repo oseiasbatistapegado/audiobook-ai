@@ -62,30 +62,28 @@ def test_chunk_ok_above_target() -> None:
     assert reason is None
 
 
-def test_fish_load_target_separate_from_parler() -> None:
-    g = _guardian(5000.0)  # below s1-mini load 8192, above parler 8192? parler is also 8192
-    # Use free between parler... wait both are 8192 now.
-    # Fish product default 8192; parler 8192 — separate via explicit cfg.
+def test_tts_load_target_separate_from_parler() -> None:
+    g = _guardian(5000.0)  # below tts load 8192, above parler 4096
     g = VRAMGuardian(
         FakeMemoryProvider(5000.0),
         cfg=GuardianConfig(
-            load_targets_mib={"fish-speech": 8192, "parler": 4096},
+            load_targets_mib={"tts": 8192, "qwen3-tts": 8192, "parler": 4096},
         ),
     )
-    ok_fish, reason_fish = g.can_load_backend("fish-speech")
-    assert ok_fish is False
-    assert reason_fish is not None and "8192" in reason_fish
+    ok_tts, reason_tts = g.can_load_backend("tts")
+    assert ok_tts is False
+    assert reason_tts is not None and "8192" in reason_tts
 
     ok_parler, reason_parler = g.can_load_backend("parler")
     assert ok_parler is True
     assert reason_parler is None
 
     with pytest.raises(MemoryPolicyError) as exc:
-        g.require_safe_headroom(kind="load", backend="fish-speech")
+        g.require_safe_headroom(kind="load", backend="tts")
     assert exc.value.kind is MemoryFailureKind.MODEL_DOES_NOT_FIT
 
 
-def test_unknown_backend_does_not_inherit_fish() -> None:
+def test_unknown_backend_does_not_inherit_tts() -> None:
     g = _guardian(24000.0)
     ok, reason = g.can_load_backend("mystery-tts")
     assert ok is False
@@ -95,20 +93,112 @@ def test_unknown_backend_does_not_inherit_fish() -> None:
     assert "22528" not in reason
 
 
-def test_progressive_growth_sustained_trend() -> None:
-    detector = ProgressiveGrowthDetector(window_k=3, drop_mib=256)
-    assert detector.record(2000.0) is False
-    assert detector.record(1800.0) is False
-    # Drop 400 over window, monotonic descent → detect
-    assert detector.record(1600.0) is True
+def test_progressive_growth_allocated_trend() -> None:
+    detector = ProgressiveGrowthDetector(
+        window_k=3,
+        growth_mib=256,
+        hard_floor_mib=300,
+        floor_margin_mib=512,
+    )
+    from audiobook_ai.gpu.guardian import GrowthSample
+
+    assert (
+        detector.record(
+            GrowthSample(free_mib=20000.0, allocated_mib=2000.0, reserved_mib=2100.0)
+        )
+        is False
+    )
+    assert (
+        detector.record(
+            GrowthSample(free_mib=19800.0, allocated_mib=2200.0, reserved_mib=2300.0)
+        )
+        is False
+    )
+    # Allocated grew ≥256 with ascending trend → real pressure
+    assert (
+        detector.record(
+            GrowthSample(free_mib=19600.0, allocated_mib=2400.0, reserved_mib=2500.0)
+        )
+        is True
+    )
+
+
+def test_progressive_growth_free_drop_stable_alloc_no_false_positive() -> None:
+    """Fish-era free-drop must not restart when allocated is stable and free is high."""
+    detector = ProgressiveGrowthDetector(
+        window_k=3,
+        growth_mib=256,
+        hard_floor_mib=300,
+        floor_margin_mib=512,
+    )
+    from audiobook_ai.gpu.guardian import GrowthSample
+
+    assert (
+        detector.record(
+            GrowthSample(free_mib=21300.0, allocated_mib=2212.0, reserved_mib=2232.0)
+        )
+        is False
+    )
+    assert (
+        detector.record(
+            GrowthSample(free_mib=20900.0, allocated_mib=2212.0, reserved_mib=2232.0)
+        )
+        is False
+    )
+    assert (
+        detector.record(
+            GrowthSample(free_mib=20600.0, allocated_mib=2212.0, reserved_mib=2232.0)
+        )
+        is False
+    )
+
+
+def test_progressive_growth_near_hard_floor() -> None:
+    detector = ProgressiveGrowthDetector(
+        window_k=3,
+        growth_mib=256,
+        hard_floor_mib=300,
+        floor_margin_mib=512,
+    )
+    from audiobook_ai.gpu.guardian import GrowthSample
+
+    # free <= 300+512 → pressure even on first sample
+    assert (
+        detector.record(
+            GrowthSample(free_mib=700.0, allocated_mib=2212.0, reserved_mib=2232.0)
+        )
+        is True
+    )
 
 
 def test_progressive_growth_isolated_sample_no_false_positive() -> None:
-    detector = ProgressiveGrowthDetector(window_k=3, drop_mib=256)
-    assert detector.record(2000.0) is False
-    # Single sharp drop, then recovery — window not consistently descending
-    assert detector.record(1500.0) is False
-    assert detector.record(1950.0) is False
+    detector = ProgressiveGrowthDetector(
+        window_k=3,
+        growth_mib=256,
+        hard_floor_mib=300,
+        floor_margin_mib=512,
+    )
+    from audiobook_ai.gpu.guardian import GrowthSample
+
+    assert (
+        detector.record(
+            GrowthSample(free_mib=20000.0, allocated_mib=2000.0, reserved_mib=2100.0)
+        )
+        is False
+    )
+    assert (
+        detector.record(
+            GrowthSample(free_mib=19500.0, allocated_mib=2500.0, reserved_mib=2600.0)
+        )
+        is False
+    )
+    # Recovery — not consistently ascending allocated
+    assert (
+        detector.record(
+            GrowthSample(free_mib=19900.0, allocated_mib=2100.0, reserved_mib=2200.0)
+        )
+        is False
+    )
 
 
 def test_release_not_verified_distinct_message() -> None:
@@ -136,9 +226,9 @@ def test_error_kinds_have_distinct_messages() -> None:
         g_chunk.require_safe_headroom(kind="chunk")
     messages[e2.value.kind] = str(e2.value)
 
-    g_load = _guardian(5000.0)
+    g_load = _guardian(2000.0)
     with pytest.raises(MemoryPolicyError) as e3:
-        g_load.require_safe_headroom(kind="load", backend="fish-speech")
+        g_load.require_safe_headroom(kind="load", backend="tts")
     messages[e3.value.kind] = str(e3.value)
 
     g_rel = _guardian(100.0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from audiobook_ai.models.cast import DialogueAttribution as _DialogueAttribution
 from audiobook_ai.models.character import Character
 from audiobook_ai.models.dialogue import Dialogue
 
@@ -23,3 +24,10 @@ class LLMChapterResponse(BaseModel):
 
     dialogues: list[Dialogue] = Field(min_length=1)
     story_updates: StoryUpdates = Field(default_factory=StoryUpdates)
+
+
+# Re-export Dialogue as InterpretedDialogue for clarity in attribution pipeline.
+InterpretedDialogue = Dialogue
+
+# Re-export attribution models from cast module.
+DialogueAttribution = _DialogueAttribution

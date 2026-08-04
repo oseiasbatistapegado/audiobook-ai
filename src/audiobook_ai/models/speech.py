@@ -91,6 +91,9 @@ def partition_dialogues(
     chunks: list[SpeechChunk] = []
     seq = sequence_start
     for turn_index, dialogue in enumerate(dialogues):
+        # Skip QA-rejected units — no audio generated.
+        if getattr(dialogue, "status", None) == "needs_review":
+            continue
         character_id = None
         if resolve_character_id is not None:
             character_id = resolve_character_id(dialogue)

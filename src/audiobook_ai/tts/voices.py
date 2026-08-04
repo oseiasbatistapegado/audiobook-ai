@@ -186,7 +186,7 @@ def resolve_voice_dir(
             return DEFAULT_VOICE_ID, candidate
 
     raise FileNotFoundError(
-        f"No pt-BR Fish Speech voice references found for voice_id={requested!r}. "
+        f"No pt-BR voice references found for voice_id={requested!r}. "
         f"Expected registry under <cache>/voices/<book_id>/{requested}/, packaged "
         f"assets at {project_assets_voices_root() / DEFAULT_VOICE_ID}, "
         f"or user override under ./references/{requested}/"

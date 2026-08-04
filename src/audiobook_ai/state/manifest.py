@@ -30,6 +30,7 @@ class ManifestChunkEntry(BaseModel):
     audio_path: str | None = None
     attempts: int = 0
     error: str | None = None
+    worker_id: int | None = None  # Which multi-worker synthesized this chunk
 
 
 class SpeechManifest(BaseModel):
@@ -106,6 +107,8 @@ def mark_completed(
     manifest: SpeechManifest,
     chunk_id: str,
     audio_path: Path | str,
+    *,
+    worker_id: int | None = None,
 ) -> SpeechManifest:
     entry = manifest.get(chunk_id)
     if entry is None:
@@ -113,6 +116,8 @@ def mark_completed(
     entry.status = ChunkStatus.COMPLETED
     entry.audio_path = str(audio_path)
     entry.error = None
+    if worker_id is not None:
+        entry.worker_id = worker_id
     return manifest
 
 

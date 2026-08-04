@@ -33,6 +33,17 @@ Em reinício após crash, OOM controlado, restart de worker ou reexecução do g
 - **WHEN** o manifest marca um chunk completed mas o arquivo de áudio está ausente ou inválido
 - **THEN** esse chunk é tratado como pendente e regenerado
 
+### Requirement: Mudança de TTS_MAX_CHUNK_CHARS invalida fingerprint de resume
+Alterar `TTS_MAX_CHUNK_CHARS` (ou equivalente usado em `chunking_fingerprint`) MUST alterar o fingerprint de chunking. Manifests da fase TTS gravados com fingerprint incompatível MUST NÃO ser reutilizados cegamente: a fase TTS desses artefatos MUST ser regenerada (ou falhar de forma explícita conforme a política de resume já existente). A residência contínua do worker TTS MUST NÃO enfraquecer skip de chunks `completed` válidos sob o mesmo fingerprint.
+
+#### Scenario: Aumentar chunk size força regeneração TTS
+- **WHEN** um work-dir possui manifest completed sob fingerprint de `TTS_MAX_CHUNK_CHARS=500` e a execução atual usa `5000`
+- **THEN** o sistema não reutiliza cegamente os áudios incompatíveis e trata a fase TTS como inválida para resume cego
+
+#### Scenario: Mesmo fingerprint permite resume com worker residente
+- **WHEN** o fingerprint de chunking no manifest coincide com a execução atual e a fase TTS é contínua
+- **THEN** chunks `completed` válidos continuam elegíveis a skip/resume
+
 ### Requirement: Atualização atômica do progresso por chunk
 Após persistir o áudio de um chunk, o sistema MUST atualizar o manifest para refletir completed (ou estado equivalente) antes de considerar o chunk concluído para resume. Fingerprint de configuração/chunking MUST invalidar chunks quando a configuração relevante mudar de forma incompatível.
 
@@ -43,3 +54,10 @@ Após persistir o áudio de um chunk, o sistema MUST atualizar o manifest para r
 #### Scenario: Mudança de config invalida resume cego
 - **WHEN** o fingerprint de chunking/config no manifest não coincide com a execução atual
 - **THEN** o sistema não reutiliza cegamente áudios incompatíveis (falha explícita ou regeneração conforme política documentada)
+
+### Requirement: Pass A resume não re-emite chunks de capítulos já interpretados
+Quando um capítulo é pulado por progresso de interpretação válido, o sistema MUST NÃO acrescentar novos SpeechChunks daquele capítulo ao manifest. Chunks já presentes MUST permanecer elegíveis às regras de resume TTS existentes (`pending`/`completed`/fingerprint).
+
+#### Scenario: Skip de interpret preserva manifest do capítulo
+- **WHEN** um capítulo está no progresso de interpretação e o generate é reexecutado
+- **THEN** o número e identidade dos chunks daquele `chapter_id` no manifest permanecem inalterados por esse skip

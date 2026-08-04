@@ -1,0 +1,40 @@
+{
+  "unit_text": "‘Como eu sabia, você já estava acordado,’ disse ela.\n\n‘Prova?’ perguntou ela.",
+  "story_characters": [
+    {
+      "id": "kiyotaka_ayanokoji",
+      "name": "Kiyotaka Ayanokoji",
+      "aliases": ["Ayanokoji", "Kiyotaka"]
+    },
+    {
+      "id": "suzune_horikita",
+      "name": "Suzune Horikita",
+      "aliases": ["Horikita", "Suzune"]
+    }
+  ],
+  "tagged_response": {
+    "dialogues": [
+      {
+        "speaker_id": "suzune_horikita",
+        "emotion": "neutral",
+        "text": "\"Como eu sabia, você já estava acordado, disse ela.\""
+      },
+      {
+        "speaker_id": "suzune_horikita",
+        "emotion": "neutral",
+        "text": "\"Prova?, perguntou ela.\""
+      }
+    ],
+    "story_updates": {}
+  },
+  "narrator_disse_que": {
+    "dialogues": [
+      {
+        "speaker_id": "narrator",
+        "emotion": "neutral",
+        "text": "Há muito tempo, em uma era já esquecida, um grande pensador disse que o céu não coloca ninguém acima ou abaixo dos outros."
+      }
+    ],
+    "story_updates": {}
+  }
+}

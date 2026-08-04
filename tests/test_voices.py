@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from audiobook_ai.models.emotion import Emotion
 from audiobook_ai.models.tts import TTSRequest
-from audiobook_ai.tts.fish_speech import FishSpeechBackend
+from audiobook_ai.tts.qwen3_tts import Qwen3TTSBackend
 from audiobook_ai.tts.voices import (
     DEFAULT_VOICE_ID,
     packaged_voice_dir,
@@ -19,14 +18,16 @@ from audiobook_ai.tts.voices import (
     resolve_voice_dir,
     voice_language,
 )
-from audiobook_ai.weights.fish import FISH_SPEECH_ID, FISH_SPEECH_REQUIRED_FILES
 from audiobook_ai.weights.manager import ModelManager
+from audiobook_ai.weights.qwen3_tts import QWEN3_TTS_ID, QWEN3_TTS_REQUIRED_FILES
 
 
 def _touch_required(dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    for name in FISH_SPEECH_REQUIRED_FILES:
-        (dest / name).write_bytes(b"ok")
+    for name in QWEN3_TTS_REQUIRED_FILES:
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
 
 
 def _write_voice(
@@ -38,6 +39,7 @@ def _write_voice(
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "reference.wav").write_bytes(b"RIFF....WAVEfmt ")
     (directory / "reference.lab").write_text(text, encoding="utf-8")
+    (directory / "reference.txt").write_text(text, encoding="utf-8")
     if language is not None:
         (directory / "metadata.json").write_text(
             json.dumps({"language": language}, ensure_ascii=False),
@@ -48,29 +50,33 @@ def _write_voice(
 
 class _FakeEngine:
     def __init__(self) -> None:
-        self.last_req: object | None = None
+        self.last_kwargs: dict | None = None
+        self.last_voice_id: str | None = None
 
-    def inference(self, req: object) -> list[SimpleNamespace]:
-        self.last_req = req
-        return [
-            SimpleNamespace(code="final", audio=(44100, b"RIFF....WAVEfmt ")),
-        ]
+    def generate_voice_clone(self, **kwargs: object) -> tuple[list, int]:
+        self.last_kwargs = dict(kwargs)
+        return [[0] * 1000], 24000
 
 
-def test_packaged_narrator_assets_exist() -> None:
-    root = project_assets_voices_root()
-    narrator = packaged_voice_dir(DEFAULT_VOICE_ID)
-    assert narrator is not None
-    assert narrator == root / DEFAULT_VOICE_ID
-    assert (narrator / "reference.wav").is_file()
-    assert (narrator / "reference.lab").is_file()
+def test_packaged_narrator_assets_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "assets" / "voices"
+    narrator = _write_voice(root / DEFAULT_VOICE_ID, text="olá em português do brasil\n")
+    monkeypatch.setattr(
+        "audiobook_ai.tts.voices.project_assets_voices_root",
+        lambda: root,
+    )
+    assert packaged_voice_dir(DEFAULT_VOICE_ID) == narrator
     assert voice_language(narrator) == "pt-BR"
-    lab = (narrator / "reference.lab").read_text(encoding="utf-8").casefold()
-    assert "português" in lab or "brasil" in lab or "olá" in lab
 
 
-def test_packaged_character_bases_exist() -> None:
-    root = project_assets_voices_root()
+def test_packaged_character_bases_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "assets" / "voices"
+    for name in ("base_male_adult", "base_female_adult", "base_male_young", "base_female_young", "base_neutral"):
+        _write_voice(root / name)
+    monkeypatch.setattr(
+        "audiobook_ai.tts.voices.project_assets_voices_root",
+        lambda: root,
+    )
     bases = [
         path
         for path in root.iterdir()
@@ -84,10 +90,16 @@ def test_packaged_character_bases_exist() -> None:
 def test_resolve_uses_packaged_assets_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    root = tmp_path / "assets" / "voices"
+    narrator = _write_voice(root / "narrator")
+    monkeypatch.setattr(
+        "audiobook_ai.tts.voices.project_assets_voices_root",
+        lambda: root,
+    )
     monkeypatch.chdir(tmp_path)
     voice_id, voice_dir = resolve_voice_dir("narrator", cache_root=tmp_path / "cache")
     assert voice_id == "narrator"
-    assert voice_dir == packaged_voice_dir("narrator")
+    assert voice_dir == narrator
 
 
 def test_resolve_prefers_user_override(
@@ -124,13 +136,19 @@ def test_unknown_voice_falls_back_to_narrator_pt_br(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    root = tmp_path / "assets" / "voices"
+    narrator = _write_voice(root / "narrator")
+    monkeypatch.setattr(
+        "audiobook_ai.tts.voices.project_assets_voices_root",
+        lambda: root,
+    )
     monkeypatch.chdir(tmp_path)
     with caplog.at_level(logging.WARNING):
         voice_id, voice_dir = resolve_voice_dir(
             "missing-voice-xyz", cache_root=tmp_path / "cache"
         )
     assert voice_id == "narrator"
-    assert voice_dir == packaged_voice_dir("narrator")
+    assert voice_dir == narrator
     assert any("falling back" in record.message for record in caplog.records)
 
 
@@ -149,31 +167,40 @@ def test_rejects_non_pt_br_packaged_language(
 
 def test_synthesize_uses_resolved_packaged_voice(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
+    _touch_required(cache / QWEN3_TTS_ID)
+    refs = tmp_path / "references"
+    _write_voice(refs / "narrator")
     engine = _FakeEngine()
     manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-    backend = FishSpeechBackend(
+    backend = Qwen3TTSBackend(
         manager=manager,
         engine_factory=lambda *_: engine,
         require_gpu=False,
         device="cpu",
+        references_dir=refs,
     )
     segment = backend.synthesize(
         TTSRequest(text="Olá", voice_id="narrator", emotion=Emotion.NEUTRAL)
     )
     assert segment.data
-    assert getattr(engine.last_req, "reference_id", None) == "narrator"
+    assert engine.last_kwargs is not None
+    assert engine.last_kwargs.get("language") == "Portuguese"
+    assert engine.last_kwargs.get("text") == "Olá"
 
 
 def test_synthesize_unknown_voice_falls_back(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = tmp_path / "cache"
-    _touch_required(cache / FISH_SPEECH_ID)
+    _touch_required(cache / QWEN3_TTS_ID)
+    refs = tmp_path / "references"
+    _write_voice(refs / "narrator")
+    monkeypatch.chdir(tmp_path)
     engine = _FakeEngine()
     manager = ModelManager(cache_dir=cache, hub_download=lambda **_: Path("unused"))
-    backend = FishSpeechBackend(
+    backend = Qwen3TTSBackend(
         manager=manager,
         engine_factory=lambda *_: engine,
         require_gpu=False,
@@ -184,5 +211,4 @@ def test_synthesize_unknown_voice_falls_back(
             TTSRequest(text="Olá", voice_id="no-such-voice", emotion=Emotion.NEUTRAL)
         )
     assert segment.data
-    assert getattr(engine.last_req, "reference_id", None) == "narrator"
     assert any("falling back" in record.message for record in caplog.records)

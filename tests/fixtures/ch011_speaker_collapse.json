@@ -1,0 +1,90 @@
+{
+  "unit_text": "Enquanto estava perdido em pensamentos, alguém chamou minha atenção. Sudou. Nossos colegas Ike e Yamauchi também estavam com ele.\n\n‘Yo, Ayanokoji. Você veio, né?’ disse Sudou.\n\n‘Oh, hey, vocês três. Parece que vocês estão se dando bem, né?’ respondi.\n\n‘Então, você também entrou em um clube?’ perguntou Sudou.\n\n‘Oh, não, eu só vim verificar. Espera, também? Você entrou em um clube, Sudou?’\n\n‘Sim. Joguei basquete desde a escola primária. Achei que entraria no time aqui.’ respondeu Sudou.\n\nAchei que ele era atlético.\n\n‘E vocês dois?’\n\n‘Nós só viemos porque achamos que poderia ser divertido, sabe? Além disso, achamos que poderíamos ter um encontro depois.’ disse Ike.\n\n‘O que você quer dizer com encontro?’ perguntei.\n\nYamauchi riu. Ike cruzou os braços e respondeu orgulhoso.",
+  "story_characters": [
+    {
+      "id": "k-ayankoji",
+      "name": "Kiyotaka Ayanokoji",
+      "aliases": ["Ayanokoji", "Kiyotaka"]
+    },
+    {
+      "id": "k-sudou",
+      "name": "Sudou",
+      "aliases": []
+    },
+    {
+      "id": "k-ike",
+      "name": "Ike",
+      "aliases": []
+    },
+    {
+      "id": "k-yamauchi",
+      "name": "Yamauchi",
+      "aliases": []
+    }
+  ],
+  "collapsed_response": {
+    "dialogues": [
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Yo, Ayanokoji. Você veio, né?’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "Enquanto estava perdido em pensamentos, alguém chamou minha atenção. Sudou. Nossos colegas Ike e Yamauchi também estavam com ele."
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Oh, hey, vocês três. Parece que vocês estão se dando bem, né?’ respondi, sentindo um pouco inveja de Sudou."
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Então, você também entrou em um clube?’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Oh, não, eu só vim verificar. Espera, também? Você entrou em um clube, Sudou?’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Sim. Joguei basquete desde a escola primária. Achei que entraria no time aqui.’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "Achei que ele era atlético, com base em sua constituição física. Basquete era claramente seu jogo."
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘E vocês dois?’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘Nós só vim porque achamos que poderia ser divertido, sabe? Além disso, achamos que poderíamos ter um encontro fateful depois.’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "‘O que você quer dizer com encontro fateful?’"
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "Queria que Ike explicasse seu objetivo um pouco estranho. Ele cruzou os braços e respondeu orgulhoso."
+      },
+      {
+        "speaker_id": "k-ayankoji",
+        "emotion": "neutral",
+        "text": "Aparentemente, Ike considerava ter uma namorada como a prioridade absoluta."
+      }
+    ],
+    "story_updates": {}
+  }
+}

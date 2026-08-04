@@ -31,10 +31,18 @@ class JobConfig(BaseModel):
     tts_max_chunk_chars: int = config.TTS_MAX_CHUNK_CHARS
     progressive_window_k: int = config.PROGRESSIVE_GROWTH_WINDOW_K
     progressive_drop_mib: int = config.PROGRESSIVE_GROWTH_DROP_MIB
+    progressive_allocated_growth_mib: int = config.PROGRESSIVE_ALLOCATED_GROWTH_MIB
+    progressive_floor_margin_mib: int = config.PROGRESSIVE_FLOOR_MARGIN_MIB
     # 0 = guardian-driven only; >0 = optional residency ceiling escape hatch.
-    fish_chunks_per_worker: int = config.FISH_CHUNKS_PER_WORKER
+    tts_chunks_per_worker: int = config.TTS_CHUNKS_PER_WORKER
+    # Legacy alias (read by older job.json / until tests catch up).
+    fish_chunks_per_worker: int = config.TTS_CHUNKS_PER_WORKER
+    # Max SpeechChunks sharing a voice_id to submit in one generate call.
+    tts_same_voice_batch_size: int = config.TTS_SAME_VOICE_BATCH_SIZE
     cache_dir: str | None = None
-    # --fish-model alias and resolved logical cache id (weights/fish.py registry).
+    # Concrete TTS model logical id (qwen3-tts).
+    tts_logical_id: str | None = None
+    # Legacy Fish fields kept for job.json back-compat during migration.
     fish_model_alias: str | None = None
     fish_logical_id: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -52,6 +60,8 @@ class JobDefinition(BaseModel):
     pending_chunk_ids: list[str] = Field(default_factory=list)
     # Voice-design jobs: character ids to generate.
     character_ids: list[str] = Field(default_factory=list)
+    # Multi-worker TTS: which worker this job belongs to (0-based index).
+    worker_id: int | None = None
     config: JobConfig = Field(default_factory=JobConfig)
     inputs: dict[str, Any] = Field(default_factory=dict)
 

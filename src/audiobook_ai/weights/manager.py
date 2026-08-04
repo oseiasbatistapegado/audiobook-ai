@@ -1,31 +1,23 @@
-"""Central ModelManager: ensure / get Fish Speech (and future) weights."""
+"""Central ModelManager: ensure / get pinned weights (neutral registry)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-import os
 
 from audiobook_ai.utils.logging import get_logger
 from audiobook_ai.weights.cache import download_lock, model_dir, resolve_cache_root
-from audiobook_ai.weights.fish import (
-    FISH_S2_PRO_ID,
-    FISH_SPEECH_ID,
-    FishSpeechModel,
-    fish_model_registry,
-    resolve_fish_model,
-)
+from audiobook_ai.weights.definition import PinnedModel
+from audiobook_ai.weights.qwen3_tts import QWEN3_TTS_ID, QWEN3_TTS_MODEL
 
 logger = get_logger(__name__)
 
 ProgressCallback = Callable[[str, float | None], None]
 
-_GATED_HINT = (
-    "Hugging Face gated model access failed. "
-    "Run `hf auth login`, accept the model terms at "
-    "https://huggingface.co/fishaudio/openaudio-s1-mini "
-    "(alias fishaudio/s1-mini), then retry."
+_AUTH_HINT = (
+    "Hugging Face download failed. "
+    "Run `hf auth login` if the repo requires auth, check network access, then retry."
 )
 
 
@@ -39,6 +31,11 @@ class ModelHandle:
     revision: str
 
 
+def default_model_registry() -> dict[str, PinnedModel]:
+    """Product weight registry (Qwen3-TTS only)."""
+    return {QWEN3_TTS_MODEL.logical_id: QWEN3_TTS_MODEL}
+
+
 class ModelManager:
     """Ensure Hugging Face weights are downloaded, validated, and reusable."""
 
@@ -46,24 +43,19 @@ class ModelManager:
         self,
         *,
         cache_dir: Path | str | None = None,
-        fish_model: FishSpeechModel | None = None,
-        fish_models: Iterable[FishSpeechModel] | None = None,
+        models: Iterable[PinnedModel] | None = None,
         hub_download: Callable[..., Path] | None = None,
     ) -> None:
         self.cache_root = resolve_cache_root(cache_dir)
         self._hub_download = hub_download
-        if fish_models is not None:
-            models = list(fish_models)
-        elif fish_model is not None:
-            models = [fish_model]
-        else:
-            models = list(fish_model_registry().values())
-        self._registry: dict[str, FishSpeechModel] = {
-            m.logical_id: m for m in models
+        registry_models = (
+            list(models) if models is not None else list(default_model_registry().values())
+        )
+        self._registry: dict[str, PinnedModel] = {
+            m.logical_id: m for m in registry_models
         }
-        self._alias_to_id: dict[str, str] = {m.alias: m.logical_id for m in models}
 
-    def get_model(self, logical_id: str = FISH_SPEECH_ID) -> ModelHandle:
+    def get_model(self, logical_id: str = QWEN3_TTS_ID) -> ModelHandle:
         """Return a handle for an already-ensured model; raises if not ready."""
         definition = self._require_definition(logical_id)
         path = model_dir(self.cache_root, logical_id)
@@ -82,7 +74,7 @@ class ModelManager:
 
     def ensure_model(
         self,
-        logical_id: str = FISH_SPEECH_ID,
+        logical_id: str = QWEN3_TTS_ID,
         *,
         progress_callback: ProgressCallback | None = None,
     ) -> ModelHandle:
@@ -95,7 +87,6 @@ class ModelManager:
 
         path = model_dir(self.cache_root, logical_id)
         path.mkdir(parents=True, exist_ok=True)
-        self._maybe_migrate_legacy_s2_pro(logical_id, path, definition)
 
         with download_lock(path):
             missing = self._missing_required(path, definition.required_files)
@@ -142,56 +133,9 @@ class ModelManager:
                 revision=definition.revision,
             )
 
-    def ensure_fish_alias(
-        self,
-        alias: str | None = None,
-        *,
-        progress_callback: ProgressCallback | None = None,
-    ) -> ModelHandle:
-        """Ensure weights for a ``--fish-model`` alias."""
-        definition = resolve_fish_model(alias)
-        if definition.logical_id not in self._registry:
-            self._registry[definition.logical_id] = definition
-            self._alias_to_id[definition.alias] = definition.logical_id
-        return self.ensure_model(
-            definition.logical_id,
-            progress_callback=progress_callback,
-        )
-
-    def _maybe_migrate_legacy_s2_pro(
-        self,
-        logical_id: str,
-        dest: Path,
-        definition: FishSpeechModel,
-    ) -> None:
-        """Reuse pre-registry ``fish-speech/`` cache when ensuring ``fish-s2-pro``."""
-        if logical_id != FISH_S2_PRO_ID:
-            return
-        if not self._missing_required(dest, definition.required_files):
-            return
-        legacy = model_dir(self.cache_root, "fish-speech")
-        if self._missing_required(legacy, definition.required_files):
-            return
-        logger.info(
-            "model-migrate id=%s from=fish-speech to=%s",
-            logical_id,
-            dest,
-        )
-        for name in definition.required_files:
-            src = legacy / name
-            target = dest / name
-            if target.exists():
-                continue
-            try:
-                os.link(src, target)
-            except OSError:
-                import shutil
-
-                shutil.copy2(src, target)
-
     def _download(
         self,
-        definition: FishSpeechModel,
+        definition: PinnedModel,
         dest: Path,
         *,
         progress_callback: ProgressCallback | None,
@@ -205,7 +149,7 @@ class ModelManager:
             progress_callback=progress_callback,
         )
 
-    def _require_definition(self, logical_id: str) -> FishSpeechModel:
+    def _require_definition(self, logical_id: str) -> PinnedModel:
         try:
             return self._registry[logical_id]
         except KeyError as exc:
@@ -233,8 +177,8 @@ class ModelManager:
             callback(message, fraction)
 
 
-def _wrap_hub_error(exc: BaseException, definition: FishSpeechModel) -> BaseException:
-    """Attach an actionable hint for gated Hugging Face repos."""
+def _wrap_hub_error(exc: BaseException, definition: PinnedModel) -> BaseException:
+    """Attach an actionable hint for auth / gated Hugging Face failures."""
     text = f"{type(exc).__name__}: {exc}".lower()
     gated = any(
         token in text
@@ -251,8 +195,8 @@ def _wrap_hub_error(exc: BaseException, definition: FishSpeechModel) -> BaseExce
     if not gated:
         return exc if isinstance(exc, Exception) else RuntimeError(str(exc))
     message = (
-        f"Failed to download Fish weights {definition.alias!r} "
-        f"({definition.repository}@{definition.revision}): {_GATED_HINT} "
+        f"Failed to download weights {definition.logical_id!r} "
+        f"({definition.repository}@{definition.revision}): {_AUTH_HINT} "
         f"Original error: {exc}"
     )
     return RuntimeError(message)
@@ -272,7 +216,7 @@ def _default_hub_download(
     except ImportError as exc:
         raise ImportError(
             "huggingface_hub is required for model download. "
-            "Install project deps (uv sync) or the tts-fish extra."
+            "Install project deps (uv sync) or the tts-qwen extra."
         ) from exc
 
     if revision.strip().lower() == "main":

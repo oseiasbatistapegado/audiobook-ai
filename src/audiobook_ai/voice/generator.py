@@ -96,6 +96,330 @@ def derive_seed(
     return int.from_bytes(digest, "big") % (2**31)
 
 
+def _patch_parler_tts_config() -> None:
+    """Fix ParlerTTSConfig for transformers >= 4.54 where nested configs are
+    consumed during PretrainedConfig.__init__() before ParlerTTSConfig can
+    validate them.
+
+    The original __init__ calls super().__init__(**kwargs) which consumes the
+    nested config dicts, then checks for them and raises ValueError.
+    This patch completely replaces __init__ to save the nested configs before
+    super() and instantiate them afterward.
+    """
+    try:
+        from parler_tts.configuration_parler_tts import ParlerTTSConfig
+    except ImportError:
+        return
+
+    if getattr(ParlerTTSConfig, "_patched", False):
+        return
+
+    from parler_tts.configuration_parler_tts import ParlerTTSDecoderConfig
+    from parler_tts.modeling_parler_tts import ParlerTTSForConditionalGeneration
+    from transformers import (
+        AutoConfig,
+        GenerationConfig,
+        GenerationMixin,
+        PretrainedConfig,
+    )
+    from packaging.version import Version
+    import torch
+
+    transformers_version = Version(
+        __import__("transformers", fromlist=["__version__"]).__version__
+    )
+    _TRANSFORMERS_457 = transformers_version >= Version("4.57")
+
+    if _TRANSFORMERS_457:
+        # Make ParlerTTSForConditionalGeneration inherit from GenerationMixin so
+        # that all generation-related methods (_get_logits_processor,
+        # _get_stopping_criteria, _prepare_cache_for_generation, etc.) are
+        # available.  In transformers >= 4.57 PreTrainedModel no longer inherits
+        # from GenerationMixin, but parler_tts still expects these methods.
+        if GenerationMixin not in ParlerTTSForConditionalGeneration.__mro__:
+            _ParlerTTSForConditionalGeneration = type(
+                "ParlerTTSForConditionalGeneration",
+                (ParlerTTSForConditionalGeneration, GenerationMixin),
+                {},
+            )
+            # Patch the module so imported references also get the new class.
+            import parler_tts.modeling_parler_tts as _parler_module
+            _parler_module.ParlerTTSForConditionalGeneration = (
+                _ParlerTTSForConditionalGeneration
+            )
+            # Also update the local reference.
+            ParlerTTSForConditionalGeneration = _ParlerTTSForConditionalGeneration
+            # Patch the parler_tts top-level package so `from parler_tts import
+            # ParlerTTSForConditionalGeneration` also resolves to the patched class.
+            import parler_tts as _parler_pkg
+            _parler_pkg.ParlerTTSForConditionalGeneration = (
+                _ParlerTTSForConditionalGeneration
+            )
+            # Override methods that have incompatible signatures with the
+            # GenerationMixin version.  parler_tts defines _get_initial_cache_position
+            # with a different signature, but GenerationMixin.generate() calls it
+            # with the GenerationMixin signature (cur_len, device, model_kwargs).
+            _ParlerTTSForConditionalGeneration._get_initial_cache_position = (
+                GenerationMixin._get_initial_cache_position
+            )
+
+    # Register ParlerTTSConfig with AutoConfig.
+    # parler_tts package does not register "parler_tts" model type (relies on
+    # auto_map from config.json), but newer transformers dropped auto_map
+    # support for some checkpoints. This ensures AutoConfig.from_pretrained()
+    # can load ParlerTTSConfig when the config.json has model_type="parler_tts".
+    AutoConfig.register("parler_tts", ParlerTTSConfig)
+
+    def _new_init(
+        self,
+        vocab_size: int = 1024,
+        prompt_cross_attention: bool = False,
+        **kwargs,
+    ) -> None:
+        # Handle no-args construction (used by transformers' to_diff_dict for defaults).
+        # In this case, just call PretrainedConfig.__init__ and set minimal defaults.
+        if not kwargs:
+            PretrainedConfig.__init__(self, **kwargs)
+            self.text_encoder = None
+            self.audio_encoder = None
+            self.decoder = None
+            self.vocab_size = vocab_size
+            self.prompt_cross_attention = prompt_cross_attention
+            self.is_encoder_decoder = True
+            return
+
+        # Save nested config values BEFORE super() consumes them.
+        text_encoder_config = kwargs.pop("text_encoder", {})
+        audio_encoder_config = kwargs.pop("audio_encoder", {})
+        decoder_config = kwargs.pop("decoder", {})
+
+        PretrainedConfig.__init__(self, **kwargs)
+
+        # Handle both dict (old transformers) and PretrainedConfig (new transformers >= 4.54)
+        # forms of nested config values.
+        if isinstance(text_encoder_config, dict):
+            text_encoder_model_type = text_encoder_config.pop("model_type")
+            self.text_encoder = AutoConfig.for_model(
+                text_encoder_model_type, **text_encoder_config
+            )
+        else:
+            self.text_encoder = text_encoder_config
+
+        if isinstance(audio_encoder_config, dict):
+            audio_encoder_model_type = audio_encoder_config.pop("model_type")
+
+            # Handle DAC version edge case (mirrors original logic)
+            model_version = kwargs.get("transformers_version", None)
+            try:
+                from parler_tts.modeling_parler_tts import (  # pyright: ignore[reportAttributeAccessIssue]
+                    use_dac_on_the_hub,
+                )
+            except Exception:
+                use_dac_on_the_hub = False
+
+            if (
+                model_version is not None
+                and Version(model_version) <= Version("4.44.2dev")
+                and use_dac_on_the_hub  # pyright: ignore[reportAttributeAccessIssue]
+                and audio_encoder_model_type == "dac"
+            ):
+                audio_encoder_model_type = "dac_on_the_hub"
+
+            self.audio_encoder = AutoConfig.for_model(
+                audio_encoder_model_type, **audio_encoder_config
+            )
+        else:
+            self.audio_encoder = audio_encoder_config
+
+        if isinstance(decoder_config, dict):
+            self.decoder = ParlerTTSDecoderConfig(**decoder_config)
+        else:
+            self.decoder = decoder_config
+
+        self.vocab_size = vocab_size
+        self.prompt_cross_attention = prompt_cross_attention
+        self.is_encoder_decoder = True
+
+         # Ensure generation_config is set (transformers 4.57+ doesn't set it
+        # automatically from config dict if the key is missing).
+        # The ParlerTTS model's generate() requires self.config.generation_config.
+        # Inherit decoder_start_token_id from the top-level config or decoder
+        # nested config so GenerationMixin.generate() validation passes.
+        if not hasattr(self, "generation_config") or self.generation_config is None:
+            gen_kwargs: dict = {}
+            if kwargs.get("decoder_start_token_id") is not None:
+                gen_kwargs["decoder_start_token_id"] = kwargs["decoder_start_token_id"]
+            else:
+                decoder = kwargs.get("decoder")
+                if isinstance(decoder, dict):
+                    gen_kwargs["decoder_start_token_id"] = decoder.get("decoder_start_token_id")
+                elif hasattr(decoder, "decoder_start_token_id"):
+                    gen_kwargs["decoder_start_token_id"] = decoder.decoder_start_token_id
+            # Propagate eos/pad/bos from top-level or decoder config.
+            for _token_key in ("eos_token_id", "pad_token_id", "bos_token_id"):
+                if gen_kwargs.get(_token_key) is None:
+                    val = kwargs.get(_token_key)
+                    if val is None and isinstance(decoder_config, dict):
+                        val = decoder_config.get(_token_key)
+                    if val is not None:
+                        gen_kwargs[_token_key] = val
+            self.generation_config = GenerationConfig(**gen_kwargs)
+
+    # Patch to_dict so it serializes nested config objects (required by
+    # transformers' to_json_string → to_diff_dict → to_dict chain).
+    _orig_to_dict = ParlerTTSConfig.to_dict
+
+    def _new_to_dict(self, *args, **kwargs):
+        d = _orig_to_dict(self, *args, **kwargs)
+        # Ensure generation_config is serializable (dict, not object)
+        gc = getattr(self, "generation_config", None)
+        if gc is not None and not isinstance(gc, dict):
+            d["generation_config"] = gc.to_dict()
+        return d
+
+    ParlerTTSConfig.to_dict = _new_to_dict  # type: ignore[assignment]
+
+    # Patch _validate_model_kwargs removed in transformers >= 4.50 but still
+    # called by parler_tts's generate wrapper (parler-tts#395).
+    # Returns empty dict so generated_kwargs stays {} (no validation).
+    if not hasattr(ParlerTTSForConditionalGeneration, "_validate_model_kwargs"):
+        ParlerTTSForConditionalGeneration._validate_model_kwargs = (  # type: ignore[attr-defined]
+            lambda self, kwargs: None
+        )
+
+    if _TRANSFORMERS_457:
+        # Patch ParlerTTSForConditionalGeneration.generate to fall back to
+        # config.generation_config when self.generation_config is None.
+        # In transformers 4.57, self.generation_config on the model may remain
+        # None even when config.generation_config is properly set.
+        _orig_generate = ParlerTTSForConditionalGeneration.generate
+
+        def _new_generate(self, *args, **kwargs):
+            if self.generation_config is None and hasattr(self, "config"):
+                gc = getattr(self.config, "generation_config", None)
+                if gc is not None:
+                    self.generation_config = gc
+            return _orig_generate(self, *args, **kwargs)
+
+        ParlerTTSForConditionalGeneration.generate = _new_generate  # type: ignore[assignment]
+
+    ParlerTTSConfig.__init__ = _new_init  # type: ignore[assignment]
+
+    if _TRANSFORMERS_457:
+        # Patch _prepare_model_inputs — removed from PreTrainedModel in
+        # transformers >= 4.50 (moved to GenerationMixin) but parler_tts calls
+        # it directly (parler-tts#395). Forward to GenerationMixin impl.
+        if not hasattr(ParlerTTSForConditionalGeneration, "_prepare_model_inputs"):
+            ParlerTTSForConditionalGeneration._prepare_model_inputs = (  # type: ignore[attr-defined]
+                GenerationMixin._prepare_model_inputs
+            )
+
+        # Patch _prepare_attention_mask_for_generation — signature changed in
+        # transformers >= 4.57 (now takes generation_config + model_kwargs as
+        # separate args, not pad/eos token ids). Parler-tts calls the OLD
+        # signature, so we wrap GenerationMixin's version to adapt.
+        _orig_prepare_attn_mask = GenerationMixin._prepare_attention_mask_for_generation
+
+        def _adapter_prepare_attn_mask(
+            self,
+            inputs_or_tensor,
+            second,
+            third=None,
+            model_kwargs=None,
+        ):
+            """Adapt old parler_tts call signature to new transformers signature.
+
+            Old signature (parler_tts calls):
+                _prepare_attention_mask_for_generation(self, input_ids, pad_token_id, eos_token_id)
+            New signature (transformers >= 4.57):
+                _prepare_attention_mask_for_generation(self, inputs_tensor, generation_config, model_kwargs)
+            """
+            # Detect old-style call: if second arg is an int/None/Tensor (token id or pre-computed tensor), it's old style.
+            # parler_tts passes generation_config._pad_token_tensor (a Tensor) as second arg.
+            is_old_style = isinstance(second, (int, type(None))) or (
+                isinstance(second, torch.Tensor) and third is not None
+            )
+            if is_old_style:
+                pad_token_id = second
+                eos_token_id = third if third is not None else second
+                # Build a minimal generation_config-like object.
+                # Ensure tensors are on the model's device.
+                model_device = next(self.parameters(), None)
+                if model_device is not None:
+                    model_device = model_device.device
+                else:
+                    model_device = None
+                pad_tensor = pad_token_id
+                if isinstance(pad_tensor, torch.Tensor):
+                    pad_tensor = pad_tensor.to(model_device) if model_device is not None else pad_tensor
+                else:
+                    pad_tensor = torch.tensor(pad_token_id, device=model_device) if isinstance(pad_token_id, int) else None
+                eos_tensor = eos_token_id
+                if isinstance(eos_tensor, torch.Tensor):
+                    eos_tensor = eos_tensor.to(model_device) if model_device is not None else eos_tensor
+                else:
+                    eos_tensor = torch.tensor(eos_token_id, device=model_device) if isinstance(eos_token_id, int) else None
+                class _FakeGc:
+                    _pad_token_tensor = pad_tensor
+                    _eos_token_tensor = eos_tensor
+                fake_gc = _FakeGc()
+                # Call with new signature.
+                return _orig_prepare_attn_mask(self, inputs_or_tensor, fake_gc, {})
+            else:
+                # Already new-style call (from elsewhere).
+                return _orig_prepare_attn_mask(self, inputs_or_tensor, second, third)
+
+        ParlerTTSForConditionalGeneration._prepare_attention_mask_for_generation = (  # type: ignore[attr-defined]
+            _adapter_prepare_attn_mask
+        )
+
+        # Patch _prepare_special_tokens and _prepare_generated_length — also moved
+        # Patch _prepare_special_tokens and _prepare_generated_length — also moved
+        # from PreTrainedModel to GenerationMixin in transformers >= 4.50.
+        for _method in ("_prepare_special_tokens", "_prepare_generated_length"):
+            if not hasattr(ParlerTTSForConditionalGeneration, _method):
+                setattr(ParlerTTSForConditionalGeneration, _method, getattr(GenerationMixin, _method))
+
+        # Patch _supports_* methods — added to GenerationMixin in transformers >=
+        # 4.57 but not inherited by PreTrainedModel-based models.
+        for _method in ("_supports_default_dynamic_cache", "_supports_logits_to_keep"):
+            if not hasattr(ParlerTTSForConditionalGeneration, _method):
+                setattr(
+                    ParlerTTSForConditionalGeneration,
+                    _method,
+                    classmethod(lambda cls: getattr(GenerationMixin, _method)(cls)),
+                )
+
+    # Monkey-patch DynamicCache to provide key_cache/value_cache as properties.
+    # Parler-TTS attention layers (modeling_parler_tts.py lines 532, 659, 874)
+    # access past_key_value.key_cache[self.layer_idx] after unwrapping
+    # EncoderDecoderCache.self_attention_cache (or cross_attention_cache).
+    # In transformers 4.46+, DynamicCache stores data in self.layers (list of
+    # DynamicLayer). The legacy key_cache[layer_idx] access pattern must work
+    # regardless of which Cache subclass is unwrapped.
+    from transformers.cache_utils import DynamicCache
+
+    if not hasattr(DynamicCache, "key_cache"):  # type: ignore[operator]
+        # type: ignore suppresses "Cannot assign to attribute" for dynamic attrs
+
+        @property
+        def _dc_key_cache(self):
+            if hasattr(self, "layers") and self.layers:
+                return [layer.keys for layer in self.layers]
+            return []
+
+        @property
+        def _dc_value_cache(self):
+            if hasattr(self, "layers") and self.layers:
+                return [layer.values for layer in self.layers]
+            return []
+
+        DynamicCache.key_cache = _dc_key_cache  # type: ignore[assignment]
+        DynamicCache.value_cache = _dc_value_cache  # type: ignore[assignment]
+
+    ParlerTTSConfig._patched = True  # type: ignore[attr-defined]
+
+
 def _free_vram_mib() -> float | None:
     try:
         import torch
@@ -253,7 +577,15 @@ class ParlerVoiceGenerator:
                 character_id=character.character_id,
             )
         except VoiceGenerationError:
-            raise
+            raise VoiceGenerationError(
+                character.character_id,
+                f"parler-tts not available: install with\n"
+                '    uv sync --extra voice-parler --extra tts-qwen\n'
+                '    uv pip install --no-deps "parler-tts @ '
+                'git+https://github.com/huggingface/parler-tts.git"\n'
+                "or skip Voice Design by setting\n"
+                "    export VOICE_GENERATOR=bank",
+            )
         except Exception as exc:
             self.unload()
             raise VoiceGenerationError(
@@ -282,19 +614,72 @@ class ParlerVoiceGenerator:
         _require_min_free_vram(config.MIN_FREE_VRAM_MIB)
         try:
             import torch
+            # Patch ParlerTTSConfig BEFORE importing ParlerTTSForConditionalGeneration
+            # so the local import gets the patched class (with GenerationMixin
+            # in MRO).  In the voice-design subprocess this ensures the patch
+            # applies even though _patch_parler_tts_config() is only defined
+            # here and not called at module load time.
+            _patch_parler_tts_config()
             from parler_tts import ParlerTTSForConditionalGeneration
+            from parler_tts.configuration_parler_tts import ParlerTTSConfig
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise VoiceGenerationError(
                 "<parler>",
                 "parler-tts is not installed. "
-                'uv pip install --no-deps "parler-tts @ git+https://github.com/huggingface/parler-tts.git"',
+                'uv pip install --no-deps "parler-tts @ '
+                'git+https://github.com/huggingface/parler-tts.git"',
             ) from exc
 
         device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        load_dtype = torch.float32 if device == "cpu" else torch.float16
         logger.info("voice-design load generator=parler model=%s device=%s", self.model_id, device)
-        self._model = ParlerTTSForConditionalGeneration.from_pretrained(self.model_id).to(
-            device
+        if device == "cpu":
+            logger.info(
+                "voice-design load generator=parler dtype=float32 "
+                "expected_weights_mib=~2456 (0.6B params)",
+            )
+        else:
+            logger.info(
+                "voice-design load generator=parler dtype=float16 "
+                "expected_weights_mib=~1228 (0.6B params)",
+            )
+        self._model = ParlerTTSForConditionalGeneration.from_pretrained(
+            self.model_id, torch_dtype=load_dtype
+        ).to(device)
+        # Sync model.generation_config from config.generation_config.
+        # Transformers 4.57 from_pretrained only sets model.generation_config
+        # from a generation_config.json file, which parler models lack.
+        if self._model.generation_config is None and hasattr(
+            self._model.config, "generation_config"
+        ):
+            self._model.generation_config = self._model.config.generation_config
+        # Pre-compute _*_token_tensor attributes that parler_tts's generate
+        # expects to exist (transformers >= 4.50 sets them lazily during
+        # the first generate() call, but parler_tts reads them before
+        # calling the parent generate).
+        gc = self._model.generation_config
+        if gc is not None:
+            for _attr, _id_name in (
+                ("_pad_token_tensor", "pad_token_id"),
+                ("_decoder_start_token_tensor", "decoder_start_token_id"),
+                ("_bos_token_tensor", "bos_token_id"),
+                ("_eos_token_tensor", "eos_token_id"),
+            ):
+                if not hasattr(gc, _attr):
+                    _id_val = getattr(gc, _id_name, None)
+                    setattr(
+                        gc,
+                        _attr,
+                           torch.tensor(_id_val, dtype=torch.long, device=device)
+                        if _id_val is not None
+                        else None,
+                    )
+        logger.info(
+            "voice-design model loaded generation_config=%s",
+            type(self._model.config.generation_config).__name__
+            if hasattr(self._model.config, "generation_config")
+            else "MISSING",
         )
         self._tokenizer = AutoTokenizer.from_pretrained(
             "parler-tts/parler-tts-mini-multilingual"

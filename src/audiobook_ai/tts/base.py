@@ -15,8 +15,9 @@ class TTSBackend(ABC):
     def synthesize(self, request: TTSRequest) -> AudioSegment:
         """Generate audio for ``request``."""
 
-    def release(self) -> None:
-        """Release GPU/host resources held by the backend (default: no-op)."""
+    def synthesize_batch(self, requests: list[TTSRequest]) -> list[AudioSegment]:
+        """Generate audio for multiple requests (default: sequential synthesize)."""
+        return [self.synthesize(request) for request in requests]
 
     def release(self) -> None:
         """Release GPU/host resources held by the backend (default: no-op)."""
